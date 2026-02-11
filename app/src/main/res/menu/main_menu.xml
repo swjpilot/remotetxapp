@@ -9,4 +9,9 @@
         android:id="@+id/action_change_callsign"
         android:title="Change Callsign"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/action_app_version"
+        android:title="Version"
+        android:enabled="false"
+        app:showAsAction="never" />
 </menu>

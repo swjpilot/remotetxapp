@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Web Bluetooth Reader (UUID dropdowns)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+    select, input { padding: 8px; min-width: 360px; }
+    button { padding: 10px 14px; cursor: pointer; }
+    #log { white-space: pre-wrap; background: #111; color: #ddd; padding: 12px; border-radius: 8px; height: 55vh; overflow: auto; }
+    .hint { color: #444; }
+    .ok { color: #0a7; }
+    .bad { color: #c33; }
+    label { font-size: 12px; color: #333; display: block; margin-bottom: 4px; }
+    .field { display: flex; flex-direction: column; }
+    code { background: #eee; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h2>Web Bluetooth Output Reader</h2>
+
+  <div class="row">
+    <div class="field">
+      <label>Profile (optional grouping)</label>
+      <select id="profileSelect"></select>
+    </div>
+
+    <div class="field">
+      <label>Service</label>
+      <select id="serviceSelect"></select>
+    </div>
+
+    <div class="field">
+      <label>Characteristic (must support Notify/Indicate)</label>
+      <select id="charSelect"></select>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <button id="connectBtn">Connect</button>
+    <button id="disconnectBtn" disabled>Disconnect</button>
+    <button id="clearBtn">Clear Log</button>
+    <span id="status" class="hint">Status: idle</span>
+  </div>
+
+  <p class="hint">
+    If your device does not advertise the service UUID, enable <code>acceptAllDevices</code> mode below.
+  </p>
+
+  <div class="row">
+    <label style="display:flex; align-items:center; gap:8px;">
+      <input type="checkbox" id="acceptAll" />
+      acceptAllDevices (use optionalServices instead of filters)
+    </label>
+  </div>
+
+  <div id="log"></div>
+
+<script>
+(() => {
+  /**
+   * Hardcoded JSON: profiles -> services -> characteristics
+   * Add/edit these to match your BLE devices.
+   *
+   * Notes:
+   * - UUIDs can be 16-bit ("ffe0") or full 128-bit strings.
+   * - "notify": true here is informational; we still attempt startNotifications().
+   */
+  const BLE_PROFILES = [
+    {
+      id: "myDevices",
+      name: "My Devices",
+      services: [
+        {
+          name: "CTR2",
+          uuid: "03b80e5a-ede8-4b33-a751-6ce34ec4c700",
+          characteristics: [
+            { name: "Read Output", uuid: "7772e5db-3868-4112-a1a9-f2669d106bf3", notify: true },
+          ]
+        }
+      ]
+    },
+    {
+      id: "common",
+      name: "Common / Examples",
+      services: [
+        {
+          name: "Nordic UART Service (NUS)",
+          uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+          characteristics: [
+            { name: "RX (Write)", uuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e", notify: false },
+            { name: "TX (Notify)", uuid: "6e400003-b5a3-f393-e0a9-e50e24dcca9e", notify: true },
+          ]
+        },
+        {
+          name: "HM-10 / CC254x Serial (example)",
+          uuid: "0000ffe0-0000-1000-8000-00805f9b34fb",
+          characteristics: [
+            { name: "FFE1 (Notify/Write)", uuid: "0000ffe1-0000-1000-8000-00805f9b34fb", notify: true },
+          ]
+        }
+      ]
+    },
+
+  ];
+
+  // ---- state ----
+  let device = null;
+  let server = null;
+  let characteristic = null;
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+  const statusEl = $("status");
+  const connectBtn = $("connectBtn");
+  const disconnectBtn = $("disconnectBtn");
+  const clearBtn = $("clearBtn");
+
+  const profileSelect = $("profileSelect");
+  const serviceSelect = $("serviceSelect");
+  const charSelect = $("charSelect");
+  const acceptAll = $("acceptAll");
+
+  function setStatus(text, cls) {
+    statusEl.className = cls || "hint";
+    statusEl.textContent = `Status: ${text}`;
+  }
+
+  function log(line) {
+    const ts = new Date().toLocaleTimeString();
+    logEl.textContent += `[${ts}] ${line}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function bytesToHex(u8) {
+    return [...u8].map(b => b.toString(16).padStart(2, "0")).join(" ");
+  }
+
+  function decodePayload(dataView) {
+    console.log(dataView)
+    const u8 = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
+    let text = "";
+    try {
+      text = new TextDecoder("utf-8", { fatal: false }).decode(u8);
+    } catch { text = ""; }
+
+    const printable = text && /^[\x09\x0A\x0D\x20-\x7E]*$/.test(text);
+    return { text: printable ? text : null, hex: bytesToHex(u8) };
+  }
+
+  function getSelectedProfile() {
+    return BLE_PROFILES.find(p => p.id === profileSelect.value) || BLE_PROFILES[0];
+  }
+
+  function getSelectedService(profile) {
+    return profile.services.find(s => s.uuid === serviceSelect.value) || profile.services[0];
+  }
+
+  function populateProfiles() {
+    profileSelect.innerHTML = "";
+    for (const p of BLE_PROFILES) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name;
+      profileSelect.appendChild(opt);
+    }
+    profileSelect.value = BLE_PROFILES[0]?.id ?? "";
+  }
+
+  function populateServices() {
+    const profile = getSelectedProfile();
+    serviceSelect.innerHTML = "";
+
+    for (const s of profile.services) {
+      const opt = document.createElement("option");
+      opt.value = s.uuid;
+      opt.textContent = `${s.name} — ${s.uuid}`;
+      serviceSelect.appendChild(opt);
+    }
+
+    serviceSelect.value = profile.services[0]?.uuid ?? "";
+    populateCharacteristics();
+  }
+
+  function populateCharacteristics() {
+    const profile = getSelectedProfile();
+    const service = getSelectedService(profile);
+
+    charSelect.innerHTML = "";
+    for (const c of service.characteristics) {
+      const opt = document.createElement("option");
+      opt.value = c.uuid;
+      opt.textContent = `${c.name}${c.notify ? " (Notify)" : ""} — ${c.uuid}`;
+      charSelect.appendChild(opt);
+    }
+
+    // Prefer a notify characteristic by default if present
+    const preferred = service.characteristics.find(c => c.notify) || service.characteristics[0];
+    charSelect.value = preferred?.uuid ?? "";
+  }
+
+  async function disconnect() {
+    try {
+      if (characteristic) {
+        try { await characteristic.stopNotifications(); } catch {}
+        characteristic.removeEventListener("characteristicvaluechanged", onValueChanged);
+      }
+      characteristic = null;
+
+      if (device?.gatt?.connected) device.gatt.disconnect();
+    } finally {
+      server = null;
+      device = null;
+      disconnectBtn.disabled = true;
+      connectBtn.disabled = false;
+      setStatus("disconnected", "hint");
+      log("Disconnected.");
+    }
+  }
+
+  function onDisconnected() {
+    log("Device disconnected (gattserverdisconnected).");
+    disconnect().catch(() => {});
+  }
+
+  function onValueChanged(event) {
+    const { text, hex } = decodePayload(event.target.value);
+    if (text !== null) log(`RX (text): ${text.replace(/\0+$/g, "")}`);
+    else log(`RX (hex): ${hex}`);
+  }
+
+  async function connect() {
+    if (!navigator.bluetooth) {
+      setStatus("Web Bluetooth not available in this browser", "bad");
+      log("ERROR: navigator.bluetooth is undefined. Use Chrome/Edge with HTTPS or localhost.");
+      return;
+    }
+
+    const serviceUuid = serviceSelect.value;
+    const charUuid = charSelect.value;
+
+    if (!serviceUuid || !charUuid) {
+      setStatus("select a service + characteristic", "bad");
+      log("ERROR: Missing selection.");
+      return;
+    }
+
+    try {
+      setStatus("requesting device…", "hint");
+
+      const requestOptions = acceptAll.checked
+        ? { acceptAllDevices: true, optionalServices: [serviceUuid] }
+        : { filters: [{ services: [serviceUuid] }] };
+
+      device = await navigator.bluetooth.requestDevice(requestOptions);
+
+      device.addEventListener("gattserverdisconnected", onDisconnected);
+      log(`Selected: ${device.name || "(no name)"} (${device.id})`);
+
+      setStatus("connecting…", "hint");
+      server = await device.gatt.connect();
+
+      setStatus("getting service…", "hint");
+      const service = await server.getPrimaryService(serviceUuid);
+
+      setStatus("getting characteristic…", "hint");
+      characteristic = await service.getCharacteristic(charUuid);
+
+      setStatus("starting notifications…", "hint");
+      characteristic.addEventListener("characteristicvaluechanged", onValueChanged);
+      await characteristic.startNotifications();
+
+      connectBtn.disabled = true;
+      disconnectBtn.disabled = false;
+      setStatus("connected (listening)", "ok");
+      log("Connected. Listening for notifications…");
+    } catch (err) {
+      console.error(err);
+      setStatus("error (see log)", "bad");
+      log(`ERROR: ${err?.message || err}`);
+      try { await disconnect(); } catch {}
+    }
+  }
+
+  // ---- wire up UI ----
+  profileSelect.addEventListener("change", populateServices);
+  serviceSelect.addEventListener("change", populateCharacteristics);
+
+  $("connectBtn").addEventListener("click", connect);
+  $("disconnectBtn").addEventListener("click", disconnect);
+  $("clearBtn").addEventListener("click", () => (logEl.textContent = ""));
+
+  // Init
+  populateProfiles();
+  populateServices();
+
+  if (!window.isSecureContext) {
+    log("WARNING: Web Bluetooth requires HTTPS or localhost (secure context).");
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 import java.io.FileInputStream
 import java.util.Properties
+import java.text.SimpleDateFormat
+import java.util.Date
 
 plugins {
     id("com.android.application")
@@ -12,6 +14,8 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+val buildTime = SimpleDateFormat("yyyyMMdd.HHmm").format(Date())
+
 android {
     namespace = "net.remotetx.hamradio"
     compileSdk = 34
@@ -19,9 +23,9 @@ android {
     defaultConfig {
         applicationId = "net.remotetx.hamradio"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 33
+        versionCode = 2
+        versionName = "1.1.$buildTime"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -55,6 +59,9 @@ android {
 }
 
 dependencies {
+    // Reference the AAR by its file name using the flatDir from settings.gradle.kts
+    implementation(group = "", name = "blueparrottsdk-release", ext = "aar")
+
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")

@@ -10,8 +10,16 @@
         android:title="Change Callsign"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_connect_ble"
+        android:title="Connect Bluetooth PTT"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_shutdown"
+        android:title="Shut Down"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_app_version"
         android:title="Version"
-        android:enabled="false"
+        android:enabled="true"
         app:showAsAction="never" />
 </menu>

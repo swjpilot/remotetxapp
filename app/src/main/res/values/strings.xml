@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">RemoteTX HAM Radio</string>
+    <string name="accessibility_service_description">Intercepts PTT button presses for RemoteTX.</string>
 </resources>

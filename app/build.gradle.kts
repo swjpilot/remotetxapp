@@ -24,8 +24,8 @@ android {
         applicationId = "net.remotetx.hamradio"
         minSdk = 24
         targetSdk = 33
-        versionCode = 2
-        versionName = "1.1.$buildTime"
+        versionCode = 4
+        versionName = "1.3.$buildTime"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

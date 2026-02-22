@@ -24,8 +24,8 @@ android {
         applicationId = "net.remotetx.hamradio"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4.$buildTime"
+        versionCode = 7
+        versionName = "1.7.$buildTime"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -34,7 +34,11 @@ android {
         create("release") {
             keyAlias = keystoreProperties["release.keyAlias"] as String? ?: "key0"
             keyPassword = keystoreProperties["release.keyPassword"] as String? ?: "android"
-            storeFile = file("release.jks")
+            
+            // Look for release.storeFile in local.properties, otherwise default to "release.jks" in app folder
+            val storePath = keystoreProperties["release.storeFile"] as String? ?: "release.jks"
+            storeFile = file(storePath)
+
             storePassword = keystoreProperties["release.storePassword"] as String? ?: "android"
         }
     }

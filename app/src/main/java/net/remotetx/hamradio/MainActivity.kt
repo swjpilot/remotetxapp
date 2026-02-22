@@ -17,6 +17,7 @@ import android.net.Uri
 import android.os.*
 import android.provider.Settings
 import android.util.Log
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
@@ -24,11 +25,15 @@ import android.view.MotionEvent
 import android.view.View
 import android.webkit.*
 import android.widget.*
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import java.text.SimpleDateFormat
@@ -120,7 +125,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        
         sharedPrefs = getSharedPreferences("RemoteTX", MODE_PRIVATE)
         isDebugToastEnabled = sharedPrefs.getBoolean("debug_toast_enabled", false)
 
@@ -131,6 +138,31 @@ class MainActivity : AppCompatActivity() {
         }
 
         setContentView(R.layout.activity_main)
+
+        // Adjust padding for system bars to prevent overlap of UI elements and WebView
+        val mainLayout = findViewById<LinearLayout>(R.id.mainLayout)
+        ViewCompat.setOnApplyWindowInsetsListener(mainLayout) { v, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars())
+            val navigationBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            
+            val density = resources.displayMetrics.density
+            val defaultPaddingPx = (16 * density).toInt()
+
+            // Calculate the actual ActionBar height
+            val actionBarHeight = getActionBarHeight()
+
+            // Apply padding to root container to push WebView and other UI into safe area.
+            // top padding = statusBarHeight + actionBarHeight + 16dp
+            v.updatePadding(
+                left = systemBars.left + defaultPaddingPx,
+                top = statusBars.top + actionBarHeight + defaultPaddingPx,
+                right = systemBars.right + defaultPaddingPx,
+                bottom = navigationBars.bottom + defaultPaddingPx
+            )
+            insets
+        }
+
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -159,6 +191,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
         loadAndConnectSavedCallsign()
+    }
+
+    private fun getActionBarHeight(): Int {
+        val tv = TypedValue()
+        return if (theme.resolveAttribute(android.R.attr.actionBarSize, tv, true)) {
+            TypedValue.complexToDimensionPixelSize(tv.data, resources.displayMetrics)
+        } else {
+            0
+        }
     }
 
     override fun onDestroy() {
@@ -293,7 +334,6 @@ class MainActivity : AppCompatActivity() {
     private fun injectHidEvent(key: String, code: String, keyCode: Int, isDown: Boolean) {
         val jsKey = if (key == "\\") "\\\\" else key
         val eventType = if (isDown) "keydown" else "keyup"
-        // Injected into both window and document, and directly to active element to ensure capture
         val js = "(function(){ var e = new KeyboardEvent('$eventType', {key:'$jsKey',code:'$code',keyCode:$keyCode,which:$keyCode,bubbles:true,cancelable:true}); window.dispatchEvent(e); document.dispatchEvent(e); if(document.activeElement) document.activeElement.dispatchEvent(e); })();"
         webView.evaluateJavascript(js, null)
     }
@@ -409,9 +449,11 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupAudio() {
-        audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
-        requestAudioFocus()
-        startBluetoothSco()
+        audioManager?.let { am ->
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            requestAudioFocus()
+            startBluetoothSco()
+        }
     }
     
     private fun startBluetoothSco() {

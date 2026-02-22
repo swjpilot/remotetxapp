@@ -60,11 +60,16 @@ class MainActivity : AppCompatActivity() {
     private var deviceDialog: AlertDialog? = null
     
     private var audioManager: AudioManager? = null
+    private var isScanning = false
+    private val handler = Handler(Looper.getMainLooper())
 
     private val pttReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val action = intent.action
-            addLog("Broadcast: $action")
+            if (action != "net.remotetx.hamradio.SERVICE_LOG") {
+                addLog("Broadcast: $action", showToast = false)
+            }
+            
             var handled = false
             when (action) {
                 Intent.ACTION_MEDIA_BUTTON -> {
@@ -75,7 +80,6 @@ class MainActivity : AppCompatActivity() {
                         intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
                     }
                     if (event != null && isPttKey(event.keyCode)) {
-                        addLog("Media Button: ${event.keyCode}")
                         triggerPtt(event.action)
                         handled = true
                     }
@@ -93,17 +97,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 "net.remotetx.hamradio.BLE_PTT_EVENT" -> {
                     val isPressed = intent.getBooleanExtra("is_pressed", false)
-                    triggerPtt(if (isPressed) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP)
+                    val keyAction = if (isPressed) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP
+                    addLog("[PTT] Trigger: $keyAction", showToast = false)
+                    triggerPtt(keyAction)
                 }
                 AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED -> {
                     val state = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
                     addLog("SCO State: $state")
-                    if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED) {
-                        addLog("Bluetooth SCO Connected")
-                    } else if (state == AudioManager.SCO_AUDIO_STATE_DISCONNECTED) {
-                        addLog("Bluetooth SCO Disconnected")
-                        // Optionally retry if we expect it to be on
-                    }
                 }
                 else -> {
                     if (action?.endsWith("PTT.DOWN") == true) {
@@ -169,12 +169,12 @@ class MainActivity : AppCompatActivity() {
         mediaSession.release()
     }
 
-    private fun addLog(message: String) {
+    private fun addLog(message: String, showToast: Boolean = true) {
         val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
         val logLine = "[$timestamp] $message"
         sessionLogs.add(logLine)
         Log.d("RemoteTX_Log", logLine)
-        if (isDebugToastEnabled) {
+        if (isDebugToastEnabled && showToast) {
             runOnUiThread { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
         }
     }
@@ -215,28 +215,86 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Select Bluetooth PTT Device")
             .setAdapter(deviceListAdapter) { _, which ->
                 val item = deviceListAdapter!!.getItem(which)
-                val address = item!!.split("\n")[1]
-                val intent = Intent(this, WebViewService::class.java)
-                intent.action = "RECONNECT"
-                intent.putExtra("device_address", address)
-                startService(intent)
-                sharedPrefs.edit().putString("ble_device_address", address).apply()
+                if (item != null) {
+                    val parts = item.split("\n")
+                    val name = parts[0]
+                    val address = parts[1]
+                    
+                    val isPTTZ = name.contains("PTT-Z", ignoreCase = true) || name.contains("PTT", ignoreCase = true)
+                    val isBlueParrott = (name.contains("BlueParrott", ignoreCase = true) || 
+                                       name.contains("Jabra", ignoreCase = true) || 
+                                       name.contains("BP ", ignoreCase = true)) && !isPTTZ
+                    
+                    addLog("Selected Device: $name ($address). Is BP: $isBlueParrott")
+                    
+                    val intent = Intent(this, WebViewService::class.java)
+                    intent.action = "RECONNECT"
+                    intent.putExtra("device_address", address)
+                    intent.putExtra("is_blue_parrot", isBlueParrott)
+                    startService(intent)
+                    
+                    sharedPrefs.edit().apply {
+                        putString("ble_device_address", address)
+                        putBoolean("is_blue_parrot", isBlueParrott)
+                        apply()
+                    }
+                }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Cancel") { _, _ -> stopBleScan() }
             .setNeutralButton("Rescan", null)
         deviceDialog = builder.create()
         deviceDialog!!.show()
         deviceDialog!!.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+             startBleScan()
              val intent = Intent(this, WebViewService::class.java)
              intent.action = "START_SCAN"
              startService(intent)
         }
+        startBleScan()
+    }
+
+    private val leScanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val device = result.device
+            if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                val name = device.name ?: "Unknown"
+                if (!discoveredDevices.containsKey(device.address)) {
+                    discoveredDevices[device.address] = device
+                    runOnUiThread {
+                        deviceListAdapter?.add("${name}\n${device.address}")
+                        deviceListAdapter?.notifyDataSetChanged()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startBleScan() {
+        if (isScanning) return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions()
+            return
+        }
+        isScanning = true
+        addLog("Starting BLE Scan")
+        bluetoothAdapter?.bluetoothLeScanner?.startScan(leScanCallback)
+        handler.postDelayed({ stopBleScan() }, 10000)
+    }
+
+    private fun stopBleScan() {
+        if (!isScanning) return
+        isScanning = false
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+            bluetoothAdapter?.bluetoothLeScanner?.stopScan(leScanCallback)
+        }
+        addLog("Stopped BLE Scan")
     }
 
     private fun injectHidEvent(key: String, code: String, keyCode: Int, isDown: Boolean) {
         val jsKey = if (key == "\\") "\\\\" else key
         val eventType = if (isDown) "keydown" else "keyup"
-        val js = "var e = new KeyboardEvent('$eventType', {key:'$jsKey',code:'$code',keyCode:$keyCode,which:$keyCode,bubbles:true}); document.dispatchEvent(e); if(document.activeElement) document.activeElement.dispatchEvent(e);"
+        // Injected into both window and document, and directly to active element to ensure capture
+        val js = "(function(){ var e = new KeyboardEvent('$eventType', {key:'$jsKey',code:'$code',keyCode:$keyCode,which:$keyCode,bubbles:true,cancelable:true}); window.dispatchEvent(e); document.dispatchEvent(e); if(document.activeElement) document.activeElement.dispatchEvent(e); })();"
         webView.evaluateJavascript(js, null)
     }
 
@@ -294,17 +352,11 @@ class MainActivity : AppCompatActivity() {
         webView.settings.domStorageEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
         webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        
-        // Ensure microphone access is allowed for web content
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
-                runOnUiThread { 
-                    addLog("WebView requesting permissions: ${request.resources.joinToString()}")
-                    request.grant(request.resources) 
-                }
+                runOnUiThread { request.grant(request.resources) }
             }
         }
-        
         applyWebViewDarkMode(isDarkMode)
         webView.webViewClient = WebViewClient()
     }
@@ -323,10 +375,16 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
         }
+        
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
+        
         val permissionsToRequest = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (permissionsToRequest.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, permissionsToRequest.toTypedArray(), PERMISSION_REQUEST_CODE)
@@ -360,16 +418,11 @@ class MainActivity : AppCompatActivity() {
         try {
             audioManager?.let { am ->
                 if (am.isBluetoothScoAvailableOffCall) {
-                    addLog("Starting Bluetooth SCO")
                     am.startBluetoothSco()
                     am.isBluetoothScoOn = true
-                } else {
-                    addLog("Bluetooth SCO not available off call")
                 }
             }
-        } catch (e: Exception) {
-            addLog("Error starting SCO: ${e.message}")
-        }
+        } catch (e: Exception) {}
     }
     
     private fun stopBluetoothSco() {
@@ -390,9 +443,7 @@ class MainActivity : AppCompatActivity() {
                             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build())
-                    .setOnAudioFocusChangeListener { focusChange ->
-                        addLog("Focus Change: $focusChange")
-                    }
+                    .setOnAudioFocusChangeListener { _ -> }
                     .build()
                 am.requestAudioFocus(focusRequest)
             } else {
@@ -422,7 +473,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
             if (grantResults.any { it != PackageManager.PERMISSION_GRANTED }) {
-                // ... rationale check ...
+                // ...
             } else {
                 setupAudio()
             }
@@ -471,19 +522,10 @@ class MainActivity : AppCompatActivity() {
             addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
             addAction("android.intent.action.PTT.DOWN")
             addAction("android.intent.action.PTT.UP")
-            addAction("com.sonim.intent.action.PTT.DOWN")
-            addAction("com.sonim.intent.action.PTT.UP")
-            addAction("com.kyocera.intent.action.PTT.DOWN")
-            addAction("com.kyocera.intent.action.PTT.UP")
-            addAction("com.symbol.button.L1") 
-            addAction("com.symbol.button.L2")
             priority = 2147483647 
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(pttReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(pttReceiver, filter)
-        }
+        
+        ContextCompat.registerReceiver(this, pttReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
     }
 
     private fun createNotificationChannel() {

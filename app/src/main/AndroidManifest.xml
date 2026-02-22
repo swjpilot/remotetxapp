@@ -30,7 +30,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.AppCompat.DayNight.DarkActionBar"
-        tools:targetApi="33">
+        tools:targetApi="35">
         
         <activity
             android:name=".MainActivity"

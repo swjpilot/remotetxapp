@@ -18,14 +18,14 @@ val buildTime = SimpleDateFormat("yyyyMMdd.HHmm").format(Date())
 
 android {
     namespace = "net.remotetx.hamradio"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "net.remotetx.hamradio"
         minSdk = 24
-        targetSdk = 33
-        versionCode = 4
-        versionName = "1.3.$buildTime"
+        targetSdk = 35
+        versionCode = 5
+        versionName = "1.4.$buildTime"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

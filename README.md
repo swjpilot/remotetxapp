@@ -18,7 +18,7 @@ Android app for HAM radio operators to access the RemoteTX web interface with hi
 1. Open the project in Android Studio.
 2. Ensure you have the BlueParrott SDK AAR in the `app/libs` folder (or configured via flatDir).
 3. Sync Gradle files.
-4. Build and run on a device (Minimum API 24, Target API 33).
+4. Build and run on a device (Minimum API 24, Target API 35).
 
 ## Permissions
 
